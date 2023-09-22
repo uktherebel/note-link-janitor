@@ -9,9 +9,10 @@ import processor from "./processor";
 
 const missingTitleSentinel = { type: "missingTitle" } as const;
 
-const headingFinder = processor().use(() => tree =>
+const headingFinder = processor().use(() => (tree) =>
   find(tree, { type: "heading", depth: 1 }) || missingTitleSentinel
 );
+
 interface Note {
   title: string;
   links: NoteLinkEntry[];
@@ -21,7 +22,7 @@ interface Note {
 
 async function readNote(notePath: string): Promise<Note> {
   const noteContents = await fs.promises.readFile(notePath, {
-    encoding: "utf-8"
+    encoding: "utf-8",
   });
 
   const parseTree = processor.parse(noteContents) as MDAST.Root;
@@ -32,25 +33,47 @@ async function readNote(notePath: string): Promise<Note> {
   const title = remark()
     .stringify({
       type: "root",
-      children: (headingNode as MDAST.Heading).children
+      children: (headingNode as MDAST.Heading).children,
     })
     .trimEnd();
 
   return { title, links: getNoteLinks(parseTree), parseTree, noteContents };
 }
 
-export default async function readAllNotes(
-  noteFolderPath: string
+async function readAllNotes(
+  noteFolderPath: string,
+  depth: number = Infinity
 ): Promise<{ [key: string]: Note }> {
-  const noteDirectoryEntries = await fs.promises.readdir(noteFolderPath, {
-    withFileTypes: true
-  });
-  const notePaths = noteDirectoryEntries
-    .filter(entry => entry.isFile() && !entry.name.startsWith(".") && entry.name.endsWith(".md"))
-    .map(entry => path.join(noteFolderPath, entry.name));
+  async function recursiveRead(folderPath: string, currentDepth: number) {
+    if (currentDepth <= depth) {
+      const noteDirectoryEntries = await fs.promises.readdir(folderPath, {
+        withFileTypes: true,
+      });
 
-  const noteEntries = await Promise.all(
-    notePaths.map(async notePath => [notePath, await readNote(notePath)])
-  );
+      const notePaths = noteDirectoryEntries.map((entry) =>
+        path.join(folderPath, entry.name)
+      );
+
+      const noteEntries = await Promise.all(
+        notePaths.map(async (notePath) => {
+          if (entry.isFile() && !entry.name.startsWith(".") && entry.name.endsWith(".md")) {
+            return [notePath, await readNote(notePath)];
+          }
+          if (entry.isDirectory()) {
+            return recursiveRead(notePath, currentDepth + 1);
+          }
+          return null;
+        })
+      );
+
+      return noteEntries.filter((entry) => entry !== null);
+    }
+    return [];
+  }
+
+  const noteEntries = await recursiveRead(noteFolderPath, 0);
+
   return Object.fromEntries(noteEntries);
 }
+
+export default readAllNotes;
